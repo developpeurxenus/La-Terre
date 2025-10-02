@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
@@ -328,19 +328,46 @@
       var form = document.querySelector('.visitor-form');
       var input = document.getElementById('visitor-name');
       var list = document.querySelector('.visitor-list');
-      var names = [];
 
       if (!form || !input || !list) {
         return;
       }
 
-      function saveNames() {
+      function sanitizeName(value) {
+        return typeof value === 'string' ? value.trim() : '';
+      }
+
+      function readFromStorage() {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(names));
+          var raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) {
+            return [];
+          }
+
+          var parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) {
+            return [];
+          }
+
+          return parsed
+            .map(sanitizeName)
+            .filter(function (entry) {
+              return entry.length > 0;
+            });
+        } catch (error) {
+          return [];
+        }
+      }
+
+      function writeToStorage(data) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         } catch (error) {
           // Stockage indisponible, ignorer pour ne pas bloquer l experience.
         }
       }
+
+      var names = readFromStorage();
 
       function renderList() {
         list.innerHTML = '';
@@ -367,37 +394,21 @@
 
       function addName(value) {
         names.push(value);
-        saveNames();
+        writeToStorage(names);
         renderList();
       }
 
       function deleteName(index) {
         if (index > -1 && index < names.length) {
           names.splice(index, 1);
-          saveNames();
+          writeToStorage(names);
           renderList();
-        }
-      }
-
-      function loadNames() {
-        try {
-          var stored = localStorage.getItem(STORAGE_KEY);
-          if (stored) {
-            var parsed = JSON.parse(stored);
-            if (Array.isArray(parsed)) {
-              names = parsed
-                .map(function (entry) { return typeof entry === 'string' ? entry.trim() : ''; })
-                .filter(function (entry) { return entry.length > 0; });
-            }
-          }
-        } catch (error) {
-          names = [];
         }
       }
 
       form.addEventListener('submit', function (event) {
         event.preventDefault();
-        var value = input.value.trim();
+        var value = sanitizeName(input.value);
 
         if (!value) {
           input.focus();
@@ -419,10 +430,17 @@
         }
       });
 
-      loadNames();
+      window.addEventListener('storage', function (event) {
+        if (event.key === STORAGE_KEY) {
+          names = readFromStorage();
+          renderList();
+        }
+      });
+
       renderList();
     })();
   </script>
 </body>
 </html>
+
 
