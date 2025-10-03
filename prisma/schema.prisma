@@ -3,18 +3,21 @@
 }
 
 datasource db {
-  provider = env("DATABASE_PROVIDER")
+  provider = "sqlite" // change en "postgresql" et remplace url pour la prod
   url      = env("DATABASE_URL")
 }
 
 model Submission {
-  id        String   @id @default(cuid())
-  email     String?  @db.VarChar(320)
-  payload   Json
-  consent   Boolean
-  ipHash    String?  @db.VarChar(128)
-  userAgent String?  @db.VarChar(255)
-  createdAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  name          String   @db.VarChar(120)
+  email         String?  @db.VarChar(320)
+  payload       Json
+  consent       Boolean
+  publicConsent Boolean  @default(false)
+  ipHash        String?  @db.VarChar(128)
+  userAgent     String?  @db.VarChar(255)
+  createdAt     DateTime @default(now())
 
   @@index([createdAt])
+  @@index([publicConsent, createdAt])
 }

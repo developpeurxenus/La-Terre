@@ -1,144 +1,86 @@
-﻿import type { RequestHandler } from 'express';
-import { Router } from 'express';
-import { Prisma } from '@prisma/client';
-import { prisma } from '../lib/prisma.js';
-import { submissionsLimiter } from '../middleware/rateLimiter.js';
-import { requireApiKey } from '../middleware/apiKey.js';
-import { hashIp } from '../utils/hash.js';
-import { sanitizePayload, sanitizeString } from '../utils/sanitize.js';
-import {
-  submissionBodySchema,
-  submissionsQuerySchema,
-  submissionEmailParamSchema,
-  submissionIdParamSchema
-} from '../validators/submission.js';
-import { config } from '../config.js';
+﻿import { Router } from 'express';
+import { z } from 'zod';
+import { prisma } from '../prisma';
+import { submissionsLimiter } from '../middlewares/limiter';
+import { csrfProtection } from '../middlewares/csrf';
+import { sha256 } from '../utils/hash';
 
-function extractClientIp(req: Parameters<RequestHandler>[0]): string | undefined {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0]?.trim();
+export const submissionsRouter = Router();
+
+const submissionSchema = z.object({
+  name: z.string().min(1).max(120),
+  email: z.string().email().optional(),
+  payload: z.record(z.any()).refine(v => Object.keys(v || {}).length > 0, { message: 'payload requis' }),
+  consent: z.literal(true),
+  publicConsent: z.boolean().default(false)
+});
+
+// CSRF token helper (GET /csrf)
+submissionsRouter.get('/csrf', csrfProtection, (req, res) => {
+  res.json({ csrfToken: (req as any).csrfToken() });
+});
+
+// POST /api/submissions — crée une soumission
+submissionsRouter.post('/', submissionsLimiter, csrfProtection, async (req, res) => {
+  const parsed = submissionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
   }
 
-  return req.ip;
-}
+  const { name, email, payload, consent, publicConsent } = parsed.data;
 
-interface CreateRouterOptions {
-  csrfProtection: RequestHandler;
-}
+  const ipHeader = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '') as string;
+  const ip = ipHeader.split(',')[0]?.trim();
+  const salt = process.env.IP_SALT || '';
+  const ipHash = ip ? sha256(ip + salt) : null;
+  const userAgent = req.headers['user-agent']?.toString();
 
-export function createSubmissionsRouter({ csrfProtection }: CreateRouterOptions): Router {
-  const router = Router();
-
-  router.post('/', submissionsLimiter, csrfProtection, async (req, res, next) => {
-    try {
-      const body = submissionBodySchema.parse(req.body);
-      const sanitizedPayload = sanitizePayload(body.payload) as Prisma.JsonValue;
-      const sanitizedEmail = body.email ? sanitizeString(body.email) : undefined;
-      const clientIp = extractClientIp(req);
-      const ipHash = hashIp(clientIp, config.IP_SALT);
-      const userAgent = req.get('user-agent')?.slice(0, 255) ?? undefined;
-
-      const created = await prisma.submission.create({
-        data: {
-          email: sanitizedEmail,
-          payload: sanitizedPayload,
-          consent: body.consent,
-          ipHash: ipHash ?? undefined,
-          userAgent
-        }
-      });
-
-      res.status(201).json({ id: created.id });
-    } catch (error) {
-      next(error);
-    }
+  const created = await prisma.submission.create({
+    data: { name, email, payload, consent, publicConsent, ipHash, userAgent },
+    select: { id: true }
   });
 
-  router.get('/', requireApiKey, async (req, res, next) => {
-    try {
-      const { cursor, limit, from, to, email } = submissionsQuerySchema.parse(req.query);
+  res.status(201).json({ id: created.id });
+});
 
-      const where: Parameters<typeof prisma.submission.findMany>[0]['where'] = {};
+// GET /api/submissions — admin (x-api-key)
+submissionsRouter.get('/', async (req, res) => {
+  const apiKey = req.header('x-api-key');
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
-      if (from || to) {
-        where.createdAt = {};
-        if (from) {
-          where.createdAt.gte = new Date(from);
-        }
-        if (to) {
-          where.createdAt.lte = new Date(to);
-        }
-      }
+  const from = req.query.from ? new Date(String(req.query.from)) : undefined;
+  const to = req.query.to ? new Date(String(req.query.to)) : undefined;
+  const email = typeof req.query.email === 'string' ? req.query.email : undefined;
+  const limit = Math.min(parseInt(String(req.query.limit ?? '20'), 10) || 20, 100);
+  const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
 
-      if (email) {
-        where.email = email;
-      }
+  const where: any = {};
+  if (from || to) where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+  if (email) where.email = email;
 
-      const take = limit + 1;
-
-      const submissions = await prisma.submission.findMany({
-        take,
-        skip: cursor ? 1 : 0,
-        cursor: cursor ? { id: cursor } : undefined,
-        orderBy: [
-          { createdAt: 'desc' },
-          { id: 'desc' }
-        ],
-        where
-      });
-
-      const hasNext = submissions.length === take;
-      const data = hasNext ? submissions.slice(0, limit) : submissions;
-      const nextCursor = hasNext ? data[data.length - 1]?.id ?? null : null;
-
-      res.json({
-        data,
-        pagination: {
-          hasNext,
-          nextCursor
-        }
-      });
-    } catch (error) {
-      next(error);
-    }
+  const items = await prisma.submission.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
   });
 
-  router.delete('/:id', requireApiKey, csrfProtection, async (req, res, next) => {
-    try {
-      const params = submissionIdParamSchema.parse(req.params);
+  const hasMore = items.length > limit;
+  const data = hasMore ? items.slice(0, limit) : items;
+  const nextCursor = hasMore ? data[data.length - 1]?.id : null;
 
-      await prisma.submission.delete({
-        where: {
-          id: params.id
-        }
-      });
+  res.json({ data, nextCursor });
+});
 
-      res.status(204).send();
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        res.status(404).json({ error: 'Soumission introuvable.' });
-        return;
-      }
-      next(error);
-    }
-  });
-
-  router.delete('/by-email/:email', requireApiKey, csrfProtection, async (req, res, next) => {
-    try {
-      const params = submissionEmailParamSchema.parse({ email: req.params.email });
-
-      const result = await prisma.submission.deleteMany({
-        where: {
-          email: params.email
-        }
-      });
-
-      res.status(200).json({ deleted: result.count });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  return router;
-}
+// DELETE /api/submissions/:id — droit à l'effacement
+submissionsRouter.delete('/:id', async (req, res) => {
+  const apiKey = req.header('x-api-key');
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const id = req.params.id;
+  await prisma.submission.delete({ where: { id } }).catch(() => null);
+  res.json({ ok: true });
+});

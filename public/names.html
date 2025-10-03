@@ -1,0 +1,56 @@
+﻿<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Liste des noms</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    .list { display: grid; gap: .75rem; max-width: 600px; }
+    .item { border: 1px solid #e5e7eb; border-radius: 12px; padding: .75rem 1rem; }
+    .meta { font-size: .85rem; opacity: .7; }
+    .load { margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Noms soumis (public)</h1>
+  <div id="list" class="list"></div>
+  <button id="loadMore" class="load">Charger plus</button>
+
+  <script>
+    let cursor = null;
+    const list = document.getElementById('list');
+    const btn = document.getElementById('loadMore');
+
+    async function fetchPage() {
+      const url = new URL(location.origin + '/api/public/submissions');
+      url.searchParams.set('limit', '20');
+      if (cursor) url.searchParams.set('cursor', cursor);
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Erreur de chargement');
+      const { data, nextCursor } = await res.json();
+
+      data.forEach(({ id, name, createdAt }) => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        const d = new Date(createdAt);
+        el.innerHTML = `
+          <div><strong>${name}</strong></div>
+          <div class="meta">Soumis le ${d.toLocaleDateString()} à ${d.toLocaleTimeString()}</div>
+        `;
+        list.appendChild(el);
+      });
+
+      cursor = nextCursor;
+      btn.style.display = cursor ? 'inline-block' : 'none';
+    }
+
+    btn.addEventListener('click', fetchPage);
+    fetchPage().catch(err => {
+      list.innerHTML = `<p style="color:crimson">${err.message}</p>`;
+      btn.style.display = 'none';
+    });
+  </script>
+</body>
+</html>

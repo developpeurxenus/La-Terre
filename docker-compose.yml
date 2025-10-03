@@ -1,33 +1,14 @@
-﻿version: "3.9"
-
+﻿version: '3.9'
 services:
-  postgres:
-    image: postgres:15
-    restart: unless-stopped
+  db:
+    image: postgres:16-alpine
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: submissions
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: collecte
+    ports:
+      - '5432:5432'
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-  app:
-    build: .
-    depends_on:
-      - postgres
-    environment:
-      NODE_ENV: production
-      DATABASE_PROVIDER: postgresql
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/submissions?schema=public
-      API_KEY: ${API_KEY:-change-me}
-      IP_SALT: ${IP_SALT:-change-me-salt}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
-      PORT: 3000
-    ports:
-      - "3000:3000"
-    command: ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
-
+      - db_data:/var/lib/postgresql/data
 volumes:
-  postgres-data:
+  db_data:
