@@ -1,0 +1,20 @@
+﻿generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = env("DATABASE_PROVIDER")
+  url      = env("DATABASE_URL")
+}
+
+model Submission {
+  id        String   @id @default(cuid())
+  email     String?  @db.VarChar(320)
+  payload   Json
+  consent   Boolean
+  ipHash    String?  @db.VarChar(128)
+  userAgent String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

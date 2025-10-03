@@ -1,0 +1,9 @@
+﻿dist/
+node_modules/
+.env
+.env.*
+prisma/dev.db
+prisma/test.db
+coverage/
+*.log
+.DS_Store
